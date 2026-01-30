@@ -49,7 +49,7 @@ if st.session_state.get("username") != "scanner":
 
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: "Client" = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TABLE_NAME = "access_logs"
 
