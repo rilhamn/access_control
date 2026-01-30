@@ -5,7 +5,15 @@ import streamlit_authenticator as stauth
 import copy
 
 # 🔑 Convert secrets to mutable dict
-config = copy.deepcopy(st.secrets)
+config = {
+    "credentials": {
+        "usernames": {
+            user: dict(st.secrets["credentials"]["usernames"][user])
+            for user in st.secrets["credentials"]["usernames"]
+        }
+    },
+    "cookie": dict(st.secrets["cookie"]),
+}
 
 authenticator = stauth.Authenticate(
     config["credentials"],
