@@ -1,5 +1,7 @@
 streamlit
+supabase
 streamlit-authenticator
+bcrypt
 streamlit-webrtc
 opencv-python-headless
 pyzbar
