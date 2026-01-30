@@ -1,0 +1,8 @@
+streamlit
+streamlit-webrtc
+opencv-python-headless
+pyzbar
+pandas
+numpy
+av
+pyyaml
