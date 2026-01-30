@@ -12,10 +12,10 @@ from pyzbar.pyzbar import decode
 
 # Safety gate
 import streamlit_authenticator as stauth
-import yaml
-from yaml.loader import SafeLoader
+import copy
 
-config = st.secrets
+# 🔑 Convert secrets to mutable dict
+config = copy.deepcopy(st.secrets)
 
 authenticator = stauth.Authenticate(
     config["credentials"],

@@ -1,9 +1,11 @@
 import streamlit as st
-import streamlit_authenticator as stauth
-import yaml
-from yaml.loader import SafeLoader
 
-config = st.secrets
+# Safety gate
+import streamlit_authenticator as stauth
+import copy
+
+# 🔑 Convert secrets to mutable dict
+config = copy.deepcopy(st.secrets)
 
 authenticator = stauth.Authenticate(
     config["credentials"],

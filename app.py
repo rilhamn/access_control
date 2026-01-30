@@ -1,8 +1,11 @@
 import streamlit as st
-import streamlit_authenticator as stauth
 
-# Load config
-config = st.secrets
+# Safety gate
+import streamlit_authenticator as stauth
+import copy
+
+# 🔑 Convert secrets to mutable dict
+config = copy.deepcopy(st.secrets)
 
 # Authenticator
 authenticator = stauth.Authenticate(
