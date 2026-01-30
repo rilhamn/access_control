@@ -79,14 +79,17 @@ class CodeStable(VideoTransformerBase):
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
         if data and not self.saved:
-            df = pd.read_csv(CSV_FILE)
+            existing = supabase.table(TABLE_NAME).select("*").eq("code_value", data).execute()
 
             if data in df["code_value"].values:
                 status_box.error(f"❌ ALREADY RECORDED: {data}")
             else:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                df.loc[len(df)] = [data, "QRCODE", ts]
-                df.to_csv(CSV_FILE, index=False)
+                supabase.table(TABLE_NAME).insert({
+                    "code_value": data,
+                    "code_type": "QRCODE",
+                    "timestamp": ts
+                }).execute()
                 status_box.success(f"✅ SAVED (QRCODE): {data}")
 
             self.saved = True
