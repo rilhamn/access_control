@@ -35,22 +35,23 @@ if st.session_state.get("username") != "scanner":
     st.error("🚫 Access denied")
     st.stop()
 
+
+# ===============================
+# 🌐 SUPABASE SETUP
+# ===============================
+
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_KEY = st.secrets["supabase"]["key"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+TABLE_NAME = "access_records"  # Replace with your table name
+
 # ===============================
 # 📷 SCANNER SETUP
 # ===============================
 
 st.title("📷 Scanner App")
-
-CSV_FILE = "access_records.csv"
-
-# Ensure CSV exists
-if not os.path.exists(CSV_FILE):
-    pd.DataFrame(
-        columns=["code_value", "code_type", "timestamp"]
-    ).to_csv(CSV_FILE, index=False)
-
 status_box = st.empty()
-
 qr_detector = cv2.QRCodeDetector()
 
 # ===============================
@@ -125,7 +126,10 @@ if st.button("🔄 Reset / Resume"):
 # ===============================
 
 st.subheader("📄 Recorded Access Logs")
-st.dataframe(pd.read_csv(CSV_FILE), use_container_width=True)
+
+records = supabase.table(TABLE_NAME).select("*").order("timestamp", desc=True).execute()
+df = pd.DataFrame(records.data)
+st.dataframe(df, use_container_width=True)
 
 # ===============================
 # 🚪 LOGOUT
