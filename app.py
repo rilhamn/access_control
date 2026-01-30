@@ -49,6 +49,6 @@ st.success(f"Welcome {name}")
 
 # ✅ Redirect logic
 if username == "scanner":
-    st.switch_page("pages/scanner.py")
+    st.switch_page("pages/1_📷_Scanner_App.py")
 elif username == "viewer":
-    st.switch_page("pages/viewer.py")
+    st.switch_page("pages/2_📊_POB_Dashboard")
