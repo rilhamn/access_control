@@ -8,7 +8,6 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import pandas as pd
 from datetime import datetime
-import os
 
 # Safety gate
 import streamlit_authenticator as stauth
@@ -79,23 +78,38 @@ class CodeStable(VideoTransformerBase):
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
         if data and not self.saved:
-            existing = supabase.table(TABLE_NAME).select("*").eq("code_value", data).execute()
 
-            if data in df["code_value"].values:
-                status_box.error(f"❌ ALREADY RECORDED: {data}")
-            else:
-                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                supabase.table(TABLE_NAME).insert({
-                    "code_value": data,
-                    "code_type": "QRCODE",
-                    "timestamp": ts
-                }).execute()
-                status_box.success(f"✅ SAVED (QRCODE): {data}")
+             try:
+                # check duplicate
+                existing = (
+                    supabase
+                    .table(TABLE_NAME)
+                    .select("code_value")
+                    .eq("code_value", data)
+                    .limit(1)
+                    .execute()
+                )
+
+                if existing.data:
+                    status_box.error(f"❌ ALREADY RECORDED: {data}")
+                else:
+                    ts = datetime.utcnow().isoformat()
+
+                    supabase.table(TABLE_NAME).insert({
+                        "code_value": data,
+                        "code_type": "QRCODE",
+                        "timestamp": ts
+                    }).execute()
+
+                    status_box.success(f"✅ SAVED (QRCODE): {data}")
+
+            except Exception as e:
+                status_box.error(f"DB error: {e}")
 
             self.saved = True
             self.paused = True
 
-        # Draw bounding box
+        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -137,9 +151,20 @@ if st.button("🔄 Reset / Resume"):
 
 st.subheader("📄 Recorded Access Logs")
 
-records = supabase.table(TABLE_NAME).select("*").order("timestamp", desc=True).execute()
-df = pd.DataFrame(records.data)
-st.dataframe(df, use_container_width=True)
+try:
+    records = (
+        supabase
+        .table(TABLE_NAME)
+        .select("*")
+        .order("timestamp", desc=True)
+        .execute()
+    )
+
+    df = pd.DataFrame(records.data)
+    st.dataframe(df, use_container_width=True)
+
+except Exception as e:
+    st.error(f"Failed to load data: {e}")
 
 # ===============================
 # 🚪 LOGOUT
