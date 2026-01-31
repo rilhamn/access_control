@@ -6,8 +6,10 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import pandas as pd
 from datetime import datetime
+import time
 import streamlit_authenticator as stauth
 from supabase import create_client
+from collections import deque
 
 
 # ===============================
@@ -31,7 +33,6 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"],
 )
 
-# only scanner user
 if st.session_state.get("username") != "scanner":
     st.error("🚫 Scanner only")
     st.stop()
@@ -41,10 +42,10 @@ if st.session_state.get("username") != "scanner":
 # 🌐 SUPABASE
 # ===============================
 
-SUPABASE_URL = st.secrets["supabase"]["url"]
-SUPABASE_KEY = st.secrets["supabase"]["key"]
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(
+    st.secrets["supabase"]["url"],
+    st.secrets["supabase"]["key"]
+)
 
 TABLE_NAME = "access_logs"
 
@@ -61,45 +62,54 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
+# message buffer (for UI thread)
+# ===============================
+
+if "scan_msgs" not in st.session_state:
+    st.session_state.scan_msgs = deque(maxlen=1)
+
+
+# ===============================
 # 🎥 VIDEO PROCESSOR
 # ===============================
 
 class CodeStable(VideoTransformerBase):
+
     def __init__(self):
-        self.paused = False
-        self.saved = False
+        self.last_code = None
+        self.last_time = 0.0
+        self.cooldown = 2.0   # seconds
 
     def transform(self, frame):
+
         img = frame.to_ndarray(format="bgr24")
 
-        if self.paused:
-            return img
-
         data, bbox, _ = qr_detector.detectAndDecode(img)
+        now = time.time()
 
-        # Save EVERY scan (duplicates allowed)
-        if data and not self.saved:
-            try:
-                ts = datetime.utcnow().isoformat()
+        if data:
 
-                supabase.table(TABLE_NAME).insert(
-                    {
-                        "code_value": data,
-                        "code_type": "QRCODE",
-                        "timestamp": ts,
-                    }
-                ).execute()
+            # debounce: same code only every X seconds
+            if data != self.last_code or (now - self.last_time) > self.cooldown:
 
-                status_box.success(f"✅ SAVED : {data}")
+                try:
+                    supabase.table(TABLE_NAME).insert(
+                        {
+                            "code_value": data,
+                            "code_type": "QRCODE",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    ).execute()
 
-            except Exception as e:
-                status_box.error(f"DB error: {e}")
+                    # DO NOT touch Streamlit UI here
+                    st.session_state.scan_msgs.append(f"✅ SAVED : {data}")
 
-            # pause after one successful read
-            self.saved = True
-            self.paused = True
+                    self.last_code = data
+                    self.last_time = now
 
-        # draw bounding box
+                except Exception as e:
+                    st.session_state.scan_msgs.append(f"❌ DB error : {e}")
+
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -120,22 +130,25 @@ class CodeStable(VideoTransformerBase):
 # 📹 CAMERA
 # ===============================
 
-ctx = webrtc_streamer(
+webrtc_streamer(
     key="qr-scanner",
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+    desired_playing_state=True
 )
 
 
 # ===============================
-# 🔄 CONTROLS
+# show notification safely
 # ===============================
 
-if st.button("🔄 Reset / Resume"):
-    if ctx.video_transformer:
-        ctx.video_transformer.saved = False
-        ctx.video_transformer.paused = False
-        status_box.empty()
+if st.session_state.scan_msgs:
+    msg = st.session_state.scan_msgs[-1]
+    if msg.startswith("✅"):
+        status_box.success(msg)
+    else:
+        status_box.error(msg)
 
 
 # ===============================
@@ -150,6 +163,7 @@ try:
         .table(TABLE_NAME)
         .select("*")
         .order("timestamp", desc=True)
+        .limit(30)
         .execute()
     )
 
