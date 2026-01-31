@@ -29,7 +29,7 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"]
 )
 
-st.title("🔐 Login")
+st.title("🏠 Access Control")
 
 login_result = authenticator.login(key="Login", location="main")
 
