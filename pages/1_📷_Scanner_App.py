@@ -2,18 +2,13 @@
 # --- Description: Scan QR codes for entry logging ---
 
 import streamlit as st
-
-# Scanner
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import pandas as pd
 from datetime import datetime
-
-# Safety gate
 import streamlit_authenticator as stauth
-
-# Database
 from supabase import create_client
+
 
 # ===============================
 # 🔐 AUTHENTICATION (Cloud-safe)
@@ -36,29 +31,33 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"],
 )
 
-# 🔒 Page protection
 if st.session_state.get("username") != "scanner":
     st.error("🚫 Access denied")
     st.stop()
 
 
 # ===============================
-# 🌐 SUPABASE SETUP
+# 🌐 SUPABASE
 # ===============================
 
 SUPABASE_URL = st.secrets["supabase"]["url"]
 SUPABASE_KEY = st.secrets["supabase"]["key"]
-supabase: "Client" = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TABLE_NAME = "access_logs"
 
+
 # ===============================
-# 📷 SCANNER SETUP
+# 📷 UI
 # ===============================
 
 st.title("📷 Scanner App")
+
 status_box = st.empty()
+
 qr_detector = cv2.QRCodeDetector()
+
 
 # ===============================
 # 🎥 VIDEO PROCESSOR
@@ -78,9 +77,7 @@ class CodeStable(VideoTransformerBase):
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
         if data and not self.saved:
-
-             try:
-                # check duplicate
+            try:
                 existing = (
                     supabase
                     .table(TABLE_NAME)
@@ -95,11 +92,13 @@ class CodeStable(VideoTransformerBase):
                 else:
                     ts = datetime.utcnow().isoformat()
 
-                    supabase.table(TABLE_NAME).insert({
-                        "code_value": data,
-                        "code_type": "QRCODE",
-                        "timestamp": ts
-                    }).execute()
+                    supabase.table(TABLE_NAME).insert(
+                        {
+                            "code_value": data,
+                            "code_type": "QRCODE",
+                            "timestamp": ts,
+                        }
+                    ).execute()
 
                     status_box.success(f"✅ SAVED (QRCODE): {data}")
 
@@ -109,7 +108,6 @@ class CodeStable(VideoTransformerBase):
             self.saved = True
             self.paused = True
 
-        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -125,6 +123,7 @@ class CodeStable(VideoTransformerBase):
 
         return img
 
+
 # ===============================
 # 📹 CAMERA
 # ===============================
@@ -134,6 +133,7 @@ ctx = webrtc_streamer(
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
 )
+
 
 # ===============================
 # 🔄 CONTROLS
@@ -145,8 +145,9 @@ if st.button("🔄 Reset / Resume"):
         ctx.video_transformer.saved = False
         status_box.empty()
 
+
 # ===============================
-# 📊 DATA VIEW
+# 📊 TABLE VIEW
 # ===============================
 
 st.subheader("📄 Recorded Access Logs")
@@ -165,6 +166,7 @@ try:
 
 except Exception as e:
     st.error(f"Failed to load data: {e}")
+
 
 # ===============================
 # 🚪 LOGOUT
