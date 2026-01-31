@@ -4,15 +4,14 @@
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
-import time
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
 import streamlit_authenticator as stauth
 from supabase import create_client
 
 
 # ===============================
-# 🔐 AUTH
+# 🔐 AUTHENTICATION
 # ===============================
 
 config = {
@@ -32,6 +31,7 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"],
 )
 
+# only scanner user
 if st.session_state.get("username") != "scanner":
     st.error("🚫 Scanner only")
     st.stop()
@@ -41,30 +41,16 @@ if st.session_state.get("username") != "scanner":
 # 🌐 SUPABASE
 # ===============================
 
-supabase = create_client(
-    st.secrets["supabase"]["url"],
-    st.secrets["supabase"]["key"]
-)
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_KEY = st.secrets["supabase"]["key"]
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TABLE_NAME = "access_logs"
 
 
 # ===============================
-# STATE
-# ===============================
-
-if "camera_on" not in st.session_state:
-    st.session_state.camera_on = False
-
-if "pending_code" not in st.session_state:
-    st.session_state.pending_code = None
-
-if "last_seen_time" not in st.session_state:
-    st.session_state.last_seen_time = 0.0
-
-
-# ===============================
-# UI
+# 📷 UI
 # ===============================
 
 st.title("📷 Scanner App")
@@ -75,41 +61,57 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
-# ▶️ START BUTTON
-# ===============================
-
-if not st.session_state.camera_on:
-    if st.button("▶️ Start camera"):
-        st.session_state.camera_on = True
-        st.rerun()
-
-
-# ===============================
 # 🎥 VIDEO PROCESSOR
 # ===============================
 
-class QRProcessor(VideoTransformerBase):
+class CodeStable(VideoTransformerBase):
+    def __init__(self):
+        self.paused = False
+        self.saved = False
 
     def transform(self, frame):
-
         img = frame.to_ndarray(format="bgr24")
 
-        # if waiting for user decision, do not detect new QR
-        if st.session_state.pending_code is not None:
+        if self.paused:
             return img
 
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
-        now = time.time()
+        # Save EVERY scan (duplicates allowed)
+        if data and not self.saved:
+            try:
+                ts = datetime.utcnow().isoformat()
 
-        # simple debounce (avoid detecting same frame 100x)
-        if data and (now - st.session_state.last_seen_time) > 1.5:
-            st.session_state.pending_code = data
-            st.session_state.last_seen_time = now
+                supabase.table(TABLE_NAME).insert(
+                    {
+                        "code_value": data,
+                        "code_type": "QRCODE",
+                        "timestamp": ts,
+                    }
+                ).execute()
 
+                status_box.success(f"✅ SAVED : {data}")
+
+            except Exception as e:
+                status_box.error(f"DB error: {e}")
+
+            # pause after one successful read
+            self.saved = True
+            self.paused = True
+
+        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
+            cv2.putText(
+                img,
+                "QRCODE",
+                (pts[0][0], pts[0][1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
 
         return img
 
@@ -118,65 +120,29 @@ class QRProcessor(VideoTransformerBase):
 # 📹 CAMERA
 # ===============================
 
-if st.session_state.camera_on:
-
-    webrtc_streamer(
-        key="qr-scanner-confirm",
-        video_transformer_factory=QRProcessor,
-        media_stream_constraints={"video": True, "audio": False},
-        async_processing=True,
-        desired_playing_state=True,
-    )
+ctx = webrtc_streamer(
+    key="qr-scanner",
+    video_transformer_factory=CodeStable,
+    media_stream_constraints={"video": True, "audio": False},
+)
 
 
 # ===============================
-# ✅ CONFIRM PANEL
+# 🔄 CONTROLS
 # ===============================
 
-if st.session_state.pending_code:
-
-    st.markdown("---")
-    st.subheader("QR detected")
-
-    st.write("Code:")
-    st.code(st.session_state.pending_code)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("✅ Record", use_container_width=True):
-            try:
-                supabase.table(TABLE_NAME).insert({
-                    "code_value": st.session_state.pending_code,
-                    "code_type": "QRCODE",
-                    "timestamp": datetime.utcnow().isoformat()
-                }).execute()
-
-                status_box.success(
-                    f"Saved : {st.session_state.pending_code}"
-                )
-
-            except Exception as e:
-                status_box.error(e)
-
-            # continue scanning
-            st.session_state.pending_code = None
-            st.rerun()
-
-    with col2:
-        if st.button("❌ Ignore", use_container_width=True):
-            status_box.info("Ignored")
-
-            st.session_state.pending_code = None
-            st.rerun()
+if st.button("🔄 Reset / Resume"):
+    if ctx.video_transformer:
+        ctx.video_transformer.saved = False
+        ctx.video_transformer.paused = False
+        status_box.empty()
 
 
 # ===============================
 # 📊 TABLE VIEW
 # ===============================
 
-st.markdown("---")
-st.subheader("📄 Recorded Access Logs (latest 20)")
+st.subheader("📄 Recorded Access Logs")
 
 try:
     records = (
@@ -184,7 +150,6 @@ try:
         .table(TABLE_NAME)
         .select("*")
         .order("timestamp", desc=True)
-        .limit(20)
         .execute()
     )
 
@@ -192,7 +157,7 @@ try:
     st.dataframe(df, use_container_width=True)
 
 except Exception as e:
-    st.error(e)
+    st.error(f"Failed to load data: {e}")
 
 
 # ===============================
