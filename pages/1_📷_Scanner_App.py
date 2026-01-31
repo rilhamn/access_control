@@ -9,8 +9,6 @@ from datetime import datetime
 import time
 import streamlit_authenticator as stauth
 from supabase import create_client
-from collections import deque
-from streamlit_autorefresh import st_autorefresh
 
 
 # ===============================
@@ -57,20 +55,9 @@ TABLE_NAME = "access_logs"
 
 st.title("📷 Scanner App")
 
-# refresh UI so messages from webrtc thread appear
-st_autorefresh(interval=1000, key="scan_refresh")
-
 status_box = st.empty()
 
 qr_detector = cv2.QRCodeDetector()
-
-
-# ===============================
-# message buffer (thread → UI)
-# ===============================
-
-if "scan_msgs" not in st.session_state:
-    st.session_state.scan_msgs = deque(maxlen=1)
 
 
 # ===============================
@@ -82,7 +69,11 @@ class CodeStable(VideoTransformerBase):
     def __init__(self):
         self.last_code = None
         self.last_time = 0.0
-        self.cooldown = 2.0  # seconds
+        self.cooldown = 2.0
+
+        # message for UI
+        self.last_message = None
+        self.last_message_ok = True
 
     def transform(self, frame):
 
@@ -93,21 +84,26 @@ class CodeStable(VideoTransformerBase):
 
         if data:
             if data != self.last_code or (now - self.last_time) > self.cooldown:
-                try:
-                    supabase.table(TABLE_NAME).insert({
-                        "code_value": data,
-                        "code_type": "QRCODE",
-                        "timestamp": datetime.utcnow().isoformat()
-                    }).execute()
 
-                    # push message only (no st.* here)
-                    st.session_state.scan_msgs.append(f"✅ SAVED : {data}")
+                try:
+                    supabase.table(TABLE_NAME).insert(
+                        {
+                            "code_value": data,
+                            "code_type": "QRCODE",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    ).execute()
+
+                    # store message in the transformer instance
+                    self.last_message = f"Saved : {data}"
+                    self.last_message_ok = True
 
                     self.last_code = data
                     self.last_time = now
 
                 except Exception as e:
-                    st.session_state.scan_msgs.append(f"❌ DB error : {e}")
+                    self.last_message = str(e)
+                    self.last_message_ok = False
 
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
@@ -120,7 +116,7 @@ class CodeStable(VideoTransformerBase):
 # 📹 CAMERA
 # ===============================
 
-webrtc_streamer(
+ctx = webrtc_streamer(
     key="qr-scanner-continuous",
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
@@ -130,15 +126,18 @@ webrtc_streamer(
 
 
 # ===============================
-# show notification (UI thread)
+# 🔔 SHOW NOTIFICATION (SAFE)
 # ===============================
 
-if st.session_state.scan_msgs:
-    msg = st.session_state.scan_msgs[-1]
-    if msg.startswith("✅"):
-        status_box.success(msg)
-    else:
-        status_box.error(msg)
+if ctx and ctx.video_transformer:
+
+    msg = ctx.video_transformer.last_message
+
+    if msg:
+        if ctx.video_transformer.last_message_ok:
+            status_box.success("✅ " + msg)
+        else:
+            status_box.error("❌ " + msg)
 
 
 # ===============================
