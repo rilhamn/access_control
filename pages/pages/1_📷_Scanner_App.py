@@ -2,12 +2,19 @@
 # --- Description: Scan QR codes for entry logging ---
 
 import streamlit as st
+
+# Scanner
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import pandas as pd
 from datetime import datetime
 import os
+
+# Safety gate
 import streamlit_authenticator as stauth
+
+# Database
+from supabase import create_client
 
 # ===============================
 # 🔐 AUTHENTICATION (Cloud-safe)
@@ -35,22 +42,23 @@ if st.session_state.get("username") != "scanner":
     st.error("🚫 Access denied")
     st.stop()
 
+
+# ===============================
+# 🌐 SUPABASE SETUP
+# ===============================
+
+SUPABASE_URL = st.secrets["supabase"]["url"]
+SUPABASE_KEY = st.secrets["supabase"]["key"]
+supabase: "Client" = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+TABLE_NAME = "access_logs"
+
 # ===============================
 # 📷 SCANNER SETUP
 # ===============================
 
 st.title("📷 Scanner App")
-
-CSV_FILE = "access_records.csv"
-
-# Ensure CSV exists
-if not os.path.exists(CSV_FILE):
-    pd.DataFrame(
-        columns=["code_value", "code_type", "timestamp"]
-    ).to_csv(CSV_FILE, index=False)
-
 status_box = st.empty()
-
 qr_detector = cv2.QRCodeDetector()
 
 # ===============================
@@ -71,14 +79,17 @@ class CodeStable(VideoTransformerBase):
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
         if data and not self.saved:
-            df = pd.read_csv(CSV_FILE)
+            existing = supabase.table(TABLE_NAME).select("*").eq("code_value", data).execute()
 
-            if data in df["code_value"].values:
+            if existing.data:
                 status_box.error(f"❌ ALREADY RECORDED: {data}")
             else:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                df.loc[len(df)] = [data, "QRCODE", ts]
-                df.to_csv(CSV_FILE, index=False)
+                supabase.table(TABLE_NAME).insert({
+                    "code_value": data,
+                    "code_type": "QRCODE",
+                    "timestamp": ts
+                }).execute()
                 status_box.success(f"✅ SAVED (QRCODE): {data}")
 
             self.saved = True
@@ -125,7 +136,10 @@ if st.button("🔄 Reset / Resume"):
 # ===============================
 
 st.subheader("📄 Recorded Access Logs")
-st.dataframe(pd.read_csv(CSV_FILE), use_container_width=True)
+
+records = supabase.table(TABLE_NAME).select("*").order("timestamp", desc=True).execute()
+df = pd.DataFrame(records.data)
+st.dataframe(df, use_container_width=True)
 
 # ===============================
 # 🚪 LOGOUT
