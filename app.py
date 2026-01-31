@@ -6,10 +6,17 @@ import copy
 
 st.set_page_config(
     page_title="Access Control System",
-    page_icon="🔐"
+    page_icon="🔐",
+    layout="wide"
 )
 
-st.title("🔐 Access Control System")
+st.markdown("""
+<style>
+section[data-testid="stSidebar"] > div > div:first-child {
+    display: none;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # 🔑 Convert secrets to mutable dict
 config = {
