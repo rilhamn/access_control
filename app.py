@@ -10,14 +10,6 @@ st.set_page_config(
     layout="wide"
 )
 
-st.markdown("""
-<style>
-section[data-testid="stSidebar"] > div > div:first-child {
-    display: none;
-}
-</style>
-""", unsafe_allow_html=True)
-
 # 🔑 Convert secrets to mutable dict
 config = {
     "credentials": {
