@@ -65,19 +65,16 @@ qr_detector = cv2.QRCodeDetector()
 # ===============================
 
 class CodeStable(VideoTransformerBase):
+
     def __init__(self):
-        self.paused = False
         self.saved = False
 
     def transform(self, frame):
         img = frame.to_ndarray(format="bgr24")
 
-        if self.paused:
-            return img
-
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
-        # Save EVERY scan (duplicates allowed)
+        # Save only once per camera session
         if data and not self.saved:
             try:
                 ts = datetime.utcnow().isoformat()
@@ -95,11 +92,9 @@ class CodeStable(VideoTransformerBase):
             except Exception as e:
                 status_box.error(f"DB error: {e}")
 
-            # pause after one successful read
+            # freeze by stopping further saves (camera will be restarted)
             self.saved = True
-            self.paused = True
 
-        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -117,11 +112,19 @@ class CodeStable(VideoTransformerBase):
 
 
 # ===============================
+# 🎯 CAMERA KEY (FOR REAL RESTART)
+# ===============================
+
+if "cam_key" not in st.session_state:
+    st.session_state.cam_key = 0
+
+
+# ===============================
 # 📹 CAMERA
 # ===============================
 
 ctx = webrtc_streamer(
-    key="qr-scanner",
+    key=f"qr-scanner-{st.session_state.cam_key}",
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
 )
@@ -132,10 +135,9 @@ ctx = webrtc_streamer(
 # ===============================
 
 if st.button("🔄 Reset / Resume"):
-    if ctx.video_transformer:
-        ctx.video_transformer.saved = False
-        ctx.video_transformer.paused = False
-        status_box.empty()
+    st.session_state.cam_key += 1
+    status_box.empty()
+    st.rerun()
 
 
 # ===============================
