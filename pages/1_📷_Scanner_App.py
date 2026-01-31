@@ -32,7 +32,7 @@ authenticator = stauth.Authenticate(
 )
 
 if st.session_state.get("username") != "scanner":
-    st.error("🚫 Access denied")
+    st.error("🚫 Scanner only")
     st.stop()
 
 
