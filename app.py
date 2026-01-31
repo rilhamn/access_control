@@ -6,9 +6,10 @@ import copy
 
 st.set_page_config(
     page_title="Access Control System",
-    page_icon="🔐",
-    layout="wide"
+    page_icon="🔐"
 )
+
+st.title("🔐 Access Control System")
 
 # 🔑 Convert secrets to mutable dict
 config = {
