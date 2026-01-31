@@ -10,6 +10,7 @@ import time
 import streamlit_authenticator as stauth
 from supabase import create_client
 from collections import deque
+from streamlit_autorefresh import st_autorefresh
 
 
 # ===============================
@@ -51,10 +52,13 @@ TABLE_NAME = "access_logs"
 
 
 # ===============================
-# 📷 UI
+# UI
 # ===============================
 
 st.title("📷 Scanner App")
+
+# refresh UI so messages from webrtc thread appear
+st_autorefresh(interval=1000, key="scan_refresh")
 
 status_box = st.empty()
 
@@ -62,7 +66,7 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
-# message buffer (for UI thread)
+# message buffer (thread → UI)
 # ===============================
 
 if "scan_msgs" not in st.session_state:
@@ -78,7 +82,7 @@ class CodeStable(VideoTransformerBase):
     def __init__(self):
         self.last_code = None
         self.last_time = 0.0
-        self.cooldown = 2.0   # seconds
+        self.cooldown = 2.0  # seconds
 
     def transform(self, frame):
 
@@ -88,20 +92,15 @@ class CodeStable(VideoTransformerBase):
         now = time.time()
 
         if data:
-
-            # debounce: same code only every X seconds
             if data != self.last_code or (now - self.last_time) > self.cooldown:
-
                 try:
-                    supabase.table(TABLE_NAME).insert(
-                        {
-                            "code_value": data,
-                            "code_type": "QRCODE",
-                            "timestamp": datetime.utcnow().isoformat(),
-                        }
-                    ).execute()
+                    supabase.table(TABLE_NAME).insert({
+                        "code_value": data,
+                        "code_type": "QRCODE",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }).execute()
 
-                    # DO NOT touch Streamlit UI here
+                    # push message only (no st.* here)
                     st.session_state.scan_msgs.append(f"✅ SAVED : {data}")
 
                     self.last_code = data
@@ -113,15 +112,6 @@ class CodeStable(VideoTransformerBase):
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
-            cv2.putText(
-                img,
-                "QRCODE",
-                (pts[0][0], pts[0][1] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-            )
 
         return img
 
@@ -131,7 +121,7 @@ class CodeStable(VideoTransformerBase):
 # ===============================
 
 webrtc_streamer(
-    key="qr-scanner",
+    key="qr-scanner-continuous",
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
@@ -140,7 +130,7 @@ webrtc_streamer(
 
 
 # ===============================
-# show notification safely
+# show notification (UI thread)
 # ===============================
 
 if st.session_state.scan_msgs:
