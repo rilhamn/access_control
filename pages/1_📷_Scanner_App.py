@@ -11,7 +11,7 @@ from supabase import create_client
 
 
 # ===============================
-# 🔐 AUTHENTICATION (Cloud-safe)
+# 🔐 AUTHENTICATION
 # ===============================
 
 config = {
@@ -31,6 +31,7 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"],
 )
 
+# only scanner user
 if st.session_state.get("username") != "scanner":
     st.error("🚫 Scanner only")
     st.stop()
@@ -76,38 +77,29 @@ class CodeStable(VideoTransformerBase):
 
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
+        # Save EVERY scan (duplicates allowed)
         if data and not self.saved:
             try:
-                existing = (
-                    supabase
-                    .table(TABLE_NAME)
-                    .select("code_value")
-                    .eq("code_value", data)
-                    .limit(1)
-                    .execute()
-                )
+                ts = datetime.utcnow().isoformat()
 
-                if existing.data:
-                    status_box.error(f"❌ ALREADY RECORDED: {data}")
-                else:
-                    ts = datetime.utcnow().isoformat()
+                supabase.table(TABLE_NAME).insert(
+                    {
+                        "code_value": data,
+                        "code_type": "QRCODE",
+                        "timestamp": ts,
+                    }
+                ).execute()
 
-                    supabase.table(TABLE_NAME).insert(
-                        {
-                            "code_value": data,
-                            "code_type": "QRCODE",
-                            "timestamp": ts,
-                        }
-                    ).execute()
-
-                    status_box.success(f"✅ SAVED (QRCODE): {data}")
+                status_box.success(f"✅ SAVED : {data}")
 
             except Exception as e:
                 status_box.error(f"DB error: {e}")
 
+            # pause after one successful read
             self.saved = True
             self.paused = True
 
+        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -141,8 +133,8 @@ ctx = webrtc_streamer(
 
 if st.button("🔄 Reset / Resume"):
     if ctx.video_transformer:
-        ctx.video_transformer.paused = False
         ctx.video_transformer.saved = False
+        ctx.video_transformer.paused = False
         status_box.empty()
 
 
