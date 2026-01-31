@@ -6,6 +6,7 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import pandas as pd
 from datetime import datetime
+import time
 import streamlit_authenticator as stauth
 from supabase import create_client
 
@@ -60,48 +61,54 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
-# 🎯 CAMERA SESSION KEY
-# ===============================
-
-if "cam_key" not in st.session_state:
-    st.session_state.cam_key = 0
-
-
-# ===============================
 # 🎥 VIDEO PROCESSOR
 # ===============================
 
 class CodeStable(VideoTransformerBase):
 
     def __init__(self):
-        self.saved = False
+        # debounce control
+        self.last_code = None
+        self.last_time = 0.0
+
+        # seconds before same QR can be saved again
+        self.cooldown = 2.0
 
     def transform(self, frame):
         img = frame.to_ndarray(format="bgr24")
 
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
-        # save only once per camera session
-        if data and not self.saved:
-            try:
-                ts = datetime.utcnow().isoformat()
+        now = time.time()
 
-                supabase.table(TABLE_NAME).insert(
-                    {
+        if data:
+
+            # allow save only if:
+            # - different QR
+            # OR
+            # - same QR but after cooldown
+            if (
+                data != self.last_code
+                or (now - self.last_time) > self.cooldown
+            ):
+                try:
+                    ts = datetime.utcnow().isoformat()
+
+                    supabase.table(TABLE_NAME).insert({
                         "code_value": data,
                         "code_type": "QRCODE",
                         "timestamp": ts,
-                    }
-                ).execute()
+                    }).execute()
 
-                status_box.success(f"✅ SAVED : {data}")
+                    status_box.success(f"✅ SAVED : {data}")
 
-            except Exception as e:
-                status_box.error(f"DB error: {e}")
+                    self.last_code = data
+                    self.last_time = now
 
-            # freeze saving (video keeps running, user presses reset)
-            self.saved = True
+                except Exception as e:
+                    status_box.error(f"DB error: {e}")
 
+        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
@@ -122,23 +129,13 @@ class CodeStable(VideoTransformerBase):
 # 📹 CAMERA
 # ===============================
 
-ctx = webrtc_streamer(
-    key=f"qr-scanner-{st.session_state.cam_key}",
+webrtc_streamer(
+    key="qr-scanner-continuous",
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
     desired_playing_state=True
 )
-
-
-# ===============================
-# 🔄 CONTROLS
-# ===============================
-
-if st.button("🔄 Reset / Resume"):
-    st.session_state.cam_key += 1
-    status_box.empty()
-    st.rerun()
 
 
 # ===============================
