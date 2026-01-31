@@ -9,10 +9,11 @@ from datetime import datetime
 import time
 import streamlit_authenticator as stauth
 from supabase import create_client
+from collections import deque
 
 
 # ===============================
-# 🔐 AUTHENTICATION
+# 🔐 AUTH
 # ===============================
 
 config = {
@@ -50,7 +51,7 @@ TABLE_NAME = "access_logs"
 
 
 # ===============================
-# 📷 UI
+# UI
 # ===============================
 
 st.title("📷 Scanner App")
@@ -61,66 +62,60 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
+# shared message queue (thread-safe enough for this case)
+# ===============================
+
+if "scan_msgs" not in st.session_state:
+    st.session_state.scan_msgs = deque(maxlen=1)
+
+
+# ===============================
 # 🎥 VIDEO PROCESSOR
 # ===============================
 
 class CodeStable(VideoTransformerBase):
 
     def __init__(self):
-        # debounce control
         self.last_code = None
         self.last_time = 0.0
-
-        # seconds before same QR can be saved again
-        self.cooldown = 2.0
+        self.cooldown = 2.0   # seconds
 
     def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
 
+        img = frame.to_ndarray(format="bgr24")
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
         now = time.time()
 
         if data:
 
-            # allow save only if:
-            # - different QR
-            # OR
-            # - same QR but after cooldown
-            if (
-                data != self.last_code
-                or (now - self.last_time) > self.cooldown
-            ):
+            if data != self.last_code or (now - self.last_time) > self.cooldown:
+
                 try:
                     ts = datetime.utcnow().isoformat()
 
                     supabase.table(TABLE_NAME).insert({
                         "code_value": data,
                         "code_type": "QRCODE",
-                        "timestamp": ts,
+                        "timestamp": ts
                     }).execute()
 
-                    status_box.success(f"✅ SAVED : {data}")
+                    # only push message, no Streamlit UI here
+                    st.session_state.scan_msgs.append(
+                        f"✅ SAVED : {data}"
+                    )
 
                     self.last_code = data
                     self.last_time = now
 
                 except Exception as e:
-                    status_box.error(f"DB error: {e}")
+                    st.session_state.scan_msgs.append(
+                        f"❌ DB error : {e}"
+                    )
 
-        # draw bounding box
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
             cv2.polylines(img, [pts], True, (0, 255, 0), 2)
-            cv2.putText(
-                img,
-                "QRCODE",
-                (pts[0][0], pts[0][1] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-            )
 
         return img
 
@@ -139,6 +134,18 @@ webrtc_streamer(
 
 
 # ===============================
+# show status safely (main thread)
+# ===============================
+
+if st.session_state.scan_msgs:
+    msg = st.session_state.scan_msgs[-1]
+    if msg.startswith("✅"):
+        status_box.success(msg)
+    else:
+        status_box.error(msg)
+
+
+# ===============================
 # 📊 TABLE VIEW
 # ===============================
 
@@ -150,6 +157,7 @@ try:
         .table(TABLE_NAME)
         .select("*")
         .order("timestamp", desc=True)
+        .limit(50)
         .execute()
     )
 
