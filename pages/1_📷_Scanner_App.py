@@ -31,7 +31,6 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"],
 )
 
-# only scanner user
 if st.session_state.get("username") != "scanner":
     st.error("🚫 Scanner only")
     st.stop()
@@ -41,10 +40,10 @@ if st.session_state.get("username") != "scanner":
 # 🌐 SUPABASE
 # ===============================
 
-SUPABASE_URL = st.secrets["supabase"]["url"]
-SUPABASE_KEY = st.secrets["supabase"]["key"]
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(
+    st.secrets["supabase"]["url"],
+    st.secrets["supabase"]["key"]
+)
 
 TABLE_NAME = "access_logs"
 
@@ -61,6 +60,14 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
+# 🎯 CAMERA SESSION KEY
+# ===============================
+
+if "cam_key" not in st.session_state:
+    st.session_state.cam_key = 0
+
+
+# ===============================
 # 🎥 VIDEO PROCESSOR
 # ===============================
 
@@ -74,7 +81,7 @@ class CodeStable(VideoTransformerBase):
 
         data, bbox, _ = qr_detector.detectAndDecode(img)
 
-        # Save only once per camera session
+        # save only once per camera session
         if data and not self.saved:
             try:
                 ts = datetime.utcnow().isoformat()
@@ -92,7 +99,7 @@ class CodeStable(VideoTransformerBase):
             except Exception as e:
                 status_box.error(f"DB error: {e}")
 
-            # freeze by stopping further saves (camera will be restarted)
+            # freeze saving (video keeps running, user presses reset)
             self.saved = True
 
         if bbox is not None:
@@ -112,14 +119,6 @@ class CodeStable(VideoTransformerBase):
 
 
 # ===============================
-# 🎯 CAMERA KEY (FOR REAL RESTART)
-# ===============================
-
-if "cam_key" not in st.session_state:
-    st.session_state.cam_key = 0
-
-
-# ===============================
 # 📹 CAMERA
 # ===============================
 
@@ -127,6 +126,8 @@ ctx = webrtc_streamer(
     key=f"qr-scanner-{st.session_state.cam_key}",
     video_transformer_factory=CodeStable,
     media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+    desired_playing_state=True
 )
 
 
