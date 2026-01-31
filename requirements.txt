@@ -1,5 +1,6 @@
 streamlit
 supabase
+streamlit-autorefresh
 streamlit-authenticator
 bcrypt
 streamlit-webrtc
