@@ -1,5 +1,5 @@
 # --- Page title: 📷 Scanner ---
-# --- Description: Scan QR, ask before insert, choose camera from browser ---
+# --- Description: Continuous QR scan, background insert, no freeze ---
 
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
@@ -7,6 +7,8 @@ import cv2
 import pandas as pd
 from datetime import datetime
 import time
+import threading
+import queue
 import streamlit_authenticator as stauth
 from supabase import create_client
 
@@ -50,14 +52,53 @@ TABLE_NAME = "access_logs"
 
 
 # ===============================
-# STATE
+# 🌐 WEBRTC (STUN)
 # ===============================
 
-if "pending_qr" not in st.session_state:
-    st.session_state.pending_qr = None
+RTC_CONFIGURATION = {
+    "iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+    ]
+}
 
-if "freeze_scan" not in st.session_state:
-    st.session_state.freeze_scan = False
+
+# ===============================
+# QUEUE + WORKER
+# ===============================
+
+if "log_queue" not in st.session_state:
+    st.session_state.log_queue = queue.Queue()
+
+
+def supabase_worker():
+
+    q = st.session_state.log_queue
+
+    while True:
+        item = q.get()
+        if item is None:
+            break
+
+        try:
+            supabase.table(TABLE_NAME).insert(item).execute()
+        except Exception as e:
+            print("Insert error:", e)
+        finally:
+            q.task_done()
+
+
+if "worker_started" not in st.session_state:
+    t = threading.Thread(target=supabase_worker, daemon=True)
+    t.start()
+    st.session_state.worker_started = True
+
+
+# ===============================
+# SESSION
+# ===============================
+
+if "webrtc_key" not in st.session_state:
+    st.session_state.webrtc_key = "qr"
 
 
 # ===============================
@@ -72,25 +113,58 @@ qr_detector = cv2.QRCodeDetector()
 
 
 # ===============================
+# 🎛 CAMERA PICKER
+# ===============================
+
+st.subheader("🎛 Camera")
+
+if st.button("🔄 Change camera (browser picker)"):
+    st.session_state.webrtc_key = str(time.time())
+    st.rerun()
+
+
+# ===============================
 # 🎥 VIDEO PROCESSOR
 # ===============================
 
 class QRProcessor(VideoTransformerBase):
 
+    def __init__(self):
+        self.last_code = None
+        self.last_time = 0
+        self.cooldown = 2.0
+
+        self.last_message = None
+        self.last_ok = True
+
     def transform(self, frame):
 
         img = frame.to_ndarray(format="bgr24")
 
-        # do not scan while waiting user decision
-        if st.session_state.freeze_scan:
-            return img
-
         data, bbox, _ = qr_detector.detectAndDecode(img)
+        now = time.time()
 
         if data:
-            # freeze and store QR in session
-            st.session_state.pending_qr = data
-            st.session_state.freeze_scan = True
+            if data != self.last_code or (now - self.last_time) > self.cooldown:
+
+                try:
+                    st.session_state.log_queue.put(
+                        {
+                            "code_value": data,
+                            "code_type": "QRCODE",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        }
+                    )
+
+                    self.last_message = f"Queued : {data}"
+                    self.last_ok = True
+
+                    self.last_code = data
+                    self.last_time = now
+
+                except Exception as e:
+                    self.last_message = str(e)
+                    self.last_ok = False
 
         if bbox is not None:
             pts = bbox.astype(int).reshape(-1, 2)
@@ -100,76 +174,34 @@ class QRProcessor(VideoTransformerBase):
 
 
 # ===============================
-# 🎛 CAMERA SELECT (browser picker)
-# ===============================
-
-st.subheader("🎛 Camera")
-
-if st.button("🔄 Change camera (open browser picker)"):
-    # changing key forces reconnection → browser shows camera chooser
-    st.session_state.webrtc_key = str(time.time())
-
-if "webrtc_key" not in st.session_state:
-    st.session_state.webrtc_key = "qr"
-
-
-# ===============================
 # 📹 CAMERA
 # ===============================
 
 ctx = webrtc_streamer(
     key=st.session_state.webrtc_key,
     video_transformer_factory=QRProcessor,
+    rtc_configuration=RTC_CONFIGURATION,
     media_stream_constraints={
         "video": True,
         "audio": False
     },
-    async_processing=True
+    async_processing=True,
 )
 
 
 # ===============================
-# ✅ DECISION UI
+# 🔔 STATUS
 # ===============================
 
-if st.session_state.pending_qr:
+if ctx and ctx.video_transformer:
 
-    st.warning("QR detected:")
-    st.code(st.session_state.pending_qr)
+    msg = ctx.video_transformer.last_message
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("✅ YES – insert to Supabase"):
-
-            try:
-                supabase.table(TABLE_NAME).insert(
-                    {
-                        "code_value": st.session_state.pending_qr,
-                        "code_type": "QRCODE",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "result": "OK"
-                    }
-                ).execute()
-
-                st.success("Saved")
-
-            except Exception as e:
-                st.error(e)
-
-            # release freeze
-            st.session_state.pending_qr = None
-            st.session_state.freeze_scan = False
-            st.experimental_rerun()
-
-    with col2:
-        if st.button("❌ NO – cancel"):
-
-            st.info("Canceled")
-
-            st.session_state.pending_qr = None
-            st.session_state.freeze_scan = False
-            st.experimental_rerun()
+    if msg:
+        if ctx.video_transformer.last_ok:
+            status_box.success(msg)
+        else:
+            status_box.error(msg)
 
 
 # ===============================
@@ -188,8 +220,11 @@ try:
         .execute()
     )
 
-    df = pd.DataFrame(records.data)
-    st.dataframe(df, use_container_width=True)
+    if records.data:
+        df = pd.DataFrame(records.data)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No data yet.")
 
 except Exception as e:
     st.error(f"Failed to load data: {e}")
