@@ -1,5 +1,5 @@
 # --- Page title: 📷 Scanner ---
-# --- Description: Continuous QR scan, background insert, no freeze ---
+# --- Description: Continuous QR scanner (no freeze, background insert)
 
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
@@ -63,28 +63,27 @@ RTC_CONFIGURATION = {
 
 
 # ===============================
-# QUEUE + WORKER
+# 🔁 GLOBAL QUEUE (IMPORTANT)
 # ===============================
 
-if "log_queue" not in st.session_state:
-    st.session_state.log_queue = queue.Queue()
+log_queue = queue.Queue()
 
+
+# ===============================
+# 🔁 BACKGROUND WORKER
+# ===============================
 
 def supabase_worker():
-
-    q = st.session_state.log_queue
-
     while True:
-        item = q.get()
+        item = log_queue.get()
         if item is None:
             break
-
         try:
             supabase.table(TABLE_NAME).insert(item).execute()
         except Exception as e:
-            print("Insert error:", e)
+            print("Supabase insert error:", e)
         finally:
-            q.task_done()
+            log_queue.task_done()
 
 
 if "worker_started" not in st.session_state:
@@ -131,7 +130,7 @@ class QRProcessor(VideoTransformerBase):
 
     def __init__(self):
         self.last_code = None
-        self.last_time = 0
+        self.last_time = 0.0
         self.cooldown = 2.0
 
         self.last_message = None
@@ -148,7 +147,7 @@ class QRProcessor(VideoTransformerBase):
             if data != self.last_code or (now - self.last_time) > self.cooldown:
 
                 try:
-                    st.session_state.log_queue.put(
+                    log_queue.put(
                         {
                             "code_value": data,
                             "code_type": "QRCODE",
@@ -186,6 +185,7 @@ ctx = webrtc_streamer(
         "audio": False
     },
     async_processing=True,
+    desired_playing_state=True
 )
 
 
